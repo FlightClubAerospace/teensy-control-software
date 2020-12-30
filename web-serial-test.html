@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>Web Serial Tester</title>
+        <style>
+            body {
+                font-family: Roboto, sans-serif;
+            }
+
+            #not-supported {
+                border: 2px solid #c0c000;
+                background: #ffff80;
+                border-radius: 4px;
+                padding: 8px;
+            }
+
+            #not-supported.hidden {
+                display: none;
+            }
+
+            .readout {
+                margin: 1em 0;
+            }
+
+            .readout h1 {
+                line-height: 0.75em;
+                margin: 0;
+                font-family: 'Iosevka', monospace;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="not-supported">
+            The Web Serial API is not supported by this browser. Try a recent version of Google Chrome.
+        </div>
+        <p>
+            <button id="connect" onclick="connect()">Connect</button>
+        </p>
+        <div class="readout">
+            Altitude:
+            <h1 id="altitude">0m</h1>
+        </div>
+        <div class="readout">
+            Heading:
+            <h1 id="heading">0&deg;</h1>
+        </div>
+        <div class="readout">
+            Airspeed:
+            <h1 id="airspeed">0 ??</h1>
+        </div>
+        <div class="readout">
+            Latitude:
+            <h1 id="latitude">0&deg; 0&apos;</h1>
+        </div>
+        <div class="readout">
+            Longitude:
+            <h1 id="longitude">0&deg; 0&apos;</h1>
+        </div>
+        <div class="readout">
+            <h1 id="satellites">0 satellites connected</h1>
+        </div>
+        <script>
+            if ('serial' in navigator) {
+                document.getElementById('not-supported').classList.add('hidden');
+            }
+
+            function splitStream(splitOn) {
+                let buffer = '';
+            
+                return new TransformStream({
+                    transform(chunk, controller) {
+                        buffer += chunk;
+                        const parts = buffer.split(splitOn);
+                        parts.slice(0, -1).forEach(part => controller.enqueue(part));
+                        buffer = parts[parts.length - 1];
+                    },
+                    flush(controller) {
+                        if (buffer) controller.enqueue(buffer);
+                    }
+                });
+            }
+
+            function parseJSON() {
+                return new TransformStream({
+                    transform(chunk, controller) {
+                        controller.enqueue(JSON.parse(chunk));
+                    }
+                });
+            }
+
+            async function connect() {
+                const altitude = document.getElementById('altitude'),
+                    heading = document.getElementById('heading'),
+                    airspeed = document.getElementById('airspeed'),
+                    latitude = document.getElementById('latitude'),
+                    longitude = document.getElementById('longitude'),
+                    satellites = document.getElementById('satellites');
+
+                const port = await navigator.serial.requestPort();
+                await port.open({ baudrate: 115200 });
+
+                const reader = port.readable.pipeThrough(new TextDecoderStream())
+                    .pipeThrough(splitStream('\n'))
+                    .pipeThrough(parseJSON()).getReader();
+
+                while (true) {
+                    try {
+                        const { value, done } = await reader.read();
+                        if (value) {
+                            if (value.hasOwnProperty('altitude')) {
+                                altitude.innerHTML = `${value.altitude}m`;
+                            } else if (value.hasOwnProperty('orientation')) {
+                                heading.innerHTML = `${value.orientation.heading}&deg;`;
+                            } else if (value.hasOwnProperty('position')) {
+                                latitude.innerHTML = `${value.position.latDeg}&deg; ${value.position.latMin}&apos;`;
+                                longitude.innerHTML = `${value.position.longDeg}&deg; ${value.position.longMin}&apos;`;
+                                satellites.innerHTML = `${value.position.satellites} satellites connected`;
+                            } else if (value.hasOwnProperty('airspeed')) {
+                                airspeed.innerHTML = `${value.airspeed} ??`;
+                            }
+                        }
+                        if (done) {
+                            console.log('no more data');
+                            reader.releaseLock();
+                        }
+                    } catch (e) {}
+                }
+            }
+        </script>
+    </body>
+</html>
